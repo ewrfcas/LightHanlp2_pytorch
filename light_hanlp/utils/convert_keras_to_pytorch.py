@@ -236,8 +236,6 @@ def get_cnn_tagger_groups(f, fs, gs):
                 names[0] = names[0].split('_')[0]
                 names[1] = str(nlayer)
                 names[2] = names[2].replace(':0', '').replace('kernel', 'weight')
-                if names[2] == 'g':
-                    continue
                 names = '.'.join(names)
             if 'Conv1D' in names and 'weight' in names:
                 weights = torch.transpose(weights, 0, 2)
@@ -252,7 +250,7 @@ def get_cnn_tagger_groups(f, fs, gs):
 
 
 if __name__ == '__main__':
-    f = h5py.File('../../models/pos/ctb5_pos_rnn_fasttext_20191230_202639/model.h5', mode='a')
+    f = h5py.File('../../models/cws/pku98_6m_conv_ngram_20200110_134736/model.h5', mode='a')
 
     print('Show keras parameters...')
     for g in f.keys():
@@ -260,6 +258,6 @@ if __name__ == '__main__':
 
     print('Start Converting...')
     for g in f.keys():
-        get_rnn_tagger_groups(f, f[g], [g])
+        get_cnn_tagger_groups(f, f[g], [g])
 
     # torch.save(pytorch_dict, '../../pytorch_models/pos/ctb5_pos_rnn_fasttext_20191230_202639/model.pth')
