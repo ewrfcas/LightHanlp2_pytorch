@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from light_hanlp.utils.preprocess import get_dep_inputs, get_dep_outputs, get_sdp_outputs
+from light_hanlp.utils.preprocess import get_dep_sdp_inputs, get_dep_outputs, get_sdp_outputs
 
 
 class MLP(nn.Module):
@@ -104,15 +104,21 @@ class BiaffineModel(nn.Module):
 
         return s_arc, s_rel
 
-    def predict(self, inputs, task):
-        input_ids, ext_input_ids, pos_ids, mask, x_lengths = get_dep_inputs(inputs, self.token_to_idx, self.pos_to_idx,
-                                                                            word_embed_range=self.n_words)
+    def predict(self, inputs, task, device='cpu'):
+        input_ids, ext_input_ids, pos_ids, mask, x_lengths = get_dep_sdp_inputs(inputs, self.token_to_idx,
+                                                                                self.pos_to_idx,
+                                                                                word_embed_range=self.n_words)
+        input_ids_tensor = torch.tensor(input_ids).to(device)
+        ext_input_ids_tensor = torch.tensor(ext_input_ids).to(device)
+        pos_ids_tensor = torch.tensor(pos_ids).to(device)
+        mask_tensor = torch.tensor(mask).to(device)
+        x_lengths_tensor = torch.tensor(x_lengths).to(device)
         with torch.no_grad():
-            arc_scores, rel_scores = self.forward(input_ids=torch.tensor(input_ids),
-                                                  ext_input_ids=torch.tensor(ext_input_ids),
-                                                  pos_ids=torch.tensor(pos_ids),
-                                                  mask=torch.tensor(mask),
-                                                  x_lengths=torch.tensor(x_lengths))
+            arc_scores, rel_scores = self.forward(input_ids=input_ids_tensor,
+                                                  ext_input_ids=ext_input_ids_tensor,
+                                                  pos_ids=pos_ids_tensor,
+                                                  mask=mask_tensor,
+                                                  x_lengths=x_lengths_tensor)
 
         arc_scores = arc_scores.cpu().numpy()
         rel_scores = rel_scores.cpu().numpy()

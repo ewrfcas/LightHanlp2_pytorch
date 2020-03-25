@@ -52,11 +52,11 @@ class ConvTagger(nn.Module):
         logits = self.dense(x)
         return logits
 
-    def predict(self, sents):
+    def predict(self, sents, device='cpu'):
         if type(sents) == str:
             sents = [sents]
         input_ids = get_cws_inputs(sents, self.token_to_idx, self.unk_tok, self.pad_tok)
-        input_ids = torch.tensor(input_ids)
+        input_ids = torch.tensor(input_ids).to(device)
         with torch.no_grad():
             output = self.forward(input_ids)
         output = output.cpu().numpy()

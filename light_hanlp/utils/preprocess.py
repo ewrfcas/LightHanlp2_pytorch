@@ -63,12 +63,14 @@ def get_pos_outputs(tag_vocab, Y, inputs):
 
 
 def iobes_to_span(words, tags):
-    delimiter = ' '
-    if all([len(w) == 1 for w in words]):
-        delimiter = ''  # might be Chinese
+    # delimiter = ' '
+    # if all([len(w) == 1 for w in words]):
+    #     delimiter = ''  # might be Chinese
+    delimiter = ''
     entities = []
     for tag, start, end in get_entities(tags):
-        entities.append((delimiter.join(words[start:end]), tag, start, end))
+        ent, type, start, end = (delimiter.join(words[start:end]), tag, start, end)
+        entities.append((ent.replace('##', ''), type, start, end))
     return entities
 
 
@@ -175,8 +177,8 @@ def start_of_chunk(prev_tag, tag, prev_type, type_):
     return chunk_start
 
 
-def get_dep_inputs(sents, token_to_idx, pos_to_idx, word_embed_range, root_tok='<bos>',
-                   root_pos='<bos>', unk_tok='<unk>', pad_tok='<pad>', unk_pos='<bos>', pad_pos='<bos>'):
+def get_dep_sdp_inputs(sents, token_to_idx, pos_to_idx, word_embed_range, root_tok='<bos>',
+                       root_pos='<bos>', unk_tok='<unk>', pad_tok='<pad>', unk_pos='<bos>', pad_pos='<bos>'):
     if type(sents) == str:
         sents = [sents]
     ext_input_ids = []
@@ -191,6 +193,7 @@ def get_dep_inputs(sents, token_to_idx, pos_to_idx, word_embed_range, root_tok='
         pos_ids.append([pos_to_idx[root_pos]])
         mask.append([1])
         for word, pos in sent:
+            word = CharTable.normalize_text(word)
             if word in token_to_idx:
                 if token_to_idx[word] < word_embed_range:
                     input_ids[-1].append(token_to_idx[word])
@@ -230,7 +233,8 @@ def get_dep_outputs(arc_scores, rel_scores, lengths, rel_vocab):
 
     return sents
 
-def get_sdp_outputs(arc_scores, rel_scores, lengths, rel_vocab, orphan_relation='<root>'):
+
+def get_sdp_outputs(arc_scores, rel_scores, lengths, rel_vocab, orphan_relation='ROOT'):
     sents = []
     # SDP和DEP最大的差别在于,DEP的关系唯一，SDP可能有多个，可能0个
     arc_preds = arc_scores > 0
@@ -238,7 +242,7 @@ def get_sdp_outputs(arc_scores, rel_scores, lengths, rel_vocab, orphan_relation=
 
     for arc_sent, rel_sent, length in zip(arc_preds, rel_preds, lengths):
         sent = []
-        for arc, rel in zip(list(arc_sent[1:, 1:]), list(rel_sent[1:, 1:])):
+        for arc, rel in zip(list(arc_sent[1:length, 1:length]), list(rel_sent[1:length, 1:length])):
             ar = []
             for idx, (a, r) in enumerate(zip(arc, rel)):
                 if a:

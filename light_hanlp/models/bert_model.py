@@ -688,9 +688,12 @@ class BertForTokenClassification(PreTrainedBertModel):
         else:
             return logits
 
-    def predict(self, inputs):
+    def predict(self, inputs, device='cpu'):
         input_ids, mask, segment_ids, tokenized_lengths, \
         tokenized_words = inputs_to_samples(inputs, self.tokenizer, self.max_length)
+        input_ids = input_ids.to(device)
+        mask = mask.to(device)
+        segment_ids = segment_ids.to(device)
         results = []
         with torch.no_grad():
             logits = self.forward(input_ids=input_ids,
