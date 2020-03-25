@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.functional as F
+from light_hanlp.utils.preprocess import get_dep_inputs, get_dep_outputs, get_sdp_outputs
 
 
 class MLP(nn.Module):
@@ -50,6 +50,10 @@ class BiaffineModel(nn.Module):
         self.n_lstm_layers = config['n_lstm_layers']
         self.n_lstm_hidden = config['n_lstm_hidden']
         self.n_ext_words = len(vocab['form_vocab']['idx_to_token'])
+        self.n_words = config['n_words']
+        self.token_to_idx = {w: i for i, w in enumerate(vocab['form_vocab']['idx_to_token'])}
+        self.pos_to_idx = {w: i for i, w in enumerate(vocab['cpos_vocab']['idx_to_token'])}
+        self.rel_vocab = {i: w for i, w in enumerate(vocab['rel_vocab']['idx_to_token'])}
 
         self.word_embed = nn.Embedding(self.n_words, self.embedding_dim, padding_idx=0)
         self.feat_embed = nn.Embedding(self.n_feats, self.embedding_dim, padding_idx=0)
@@ -78,7 +82,7 @@ class BiaffineModel(nn.Module):
         pos_embed = self.feat_embed(pos_ids)
         embed = torch.cat([word_embed, pos_embed], dim=-1)
 
-        x = torch.nn.utils.rnn.pack_padded_sequence(embed, x_lengths, batch_first=True)
+        x = torch.nn.utils.rnn.pack_padded_sequence(embed, x_lengths, batch_first=True, enforce_sorted=False)
         x, _ = self.lstm(x)
         x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
 
@@ -100,126 +104,23 @@ class BiaffineModel(nn.Module):
 
         return s_arc, s_rel
 
+    def predict(self, inputs, task):
+        input_ids, ext_input_ids, pos_ids, mask, x_lengths = get_dep_inputs(inputs, self.token_to_idx, self.pos_to_idx,
+                                                                            word_embed_range=self.n_words)
+        with torch.no_grad():
+            arc_scores, rel_scores = self.forward(input_ids=torch.tensor(input_ids),
+                                                  ext_input_ids=torch.tensor(ext_input_ids),
+                                                  pos_ids=torch.tensor(pos_ids),
+                                                  mask=torch.tensor(mask),
+                                                  x_lengths=torch.tensor(x_lengths))
 
-# import json
-#
-# config = json.load(open('../pytorch_models/dep/biaffine_ctb7_20200109_022431/config.json'))
-# vocabs = json.load(open('../pytorch_models/dep/biaffine_ctb7_20200109_022431/vocabs.json'))
-# model = BiaffineModel(config, vocabs)
-#
-#
-# def torch_init_model(model, init_checkpoint):
-#     state_dict = torch.load(init_checkpoint, map_location='cpu')
-#     missing_keys = []
-#     unexpected_keys = []
-#     error_msgs = []
-#     # copy state_dict so _load_from_state_dict can modify it
-#     metadata = getattr(state_dict, '_metadata', None)
-#     state_dict = state_dict.copy()
-#     if metadata is not None:
-#         state_dict._metadata = metadata
-#
-#     def load(module, prefix=''):
-#         local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
-#
-#         module._load_from_state_dict(
-#             state_dict, prefix, local_metadata, True, missing_keys, unexpected_keys, error_msgs)
-#         for name, child in module._modules.items():
-#             if child is not None:
-#                 load(child, prefix + name + '.')
-#
-#     load(model, prefix='')
-#
-#     print("missing keys:{}".format(missing_keys))
-#     print('unexpected keys:{}'.format(unexpected_keys))
-#     print('error msgs:{}'.format(error_msgs))
-#
-#
-# torch_init_model(model, '../pytorch_models/dep/biaffine_ctb7_20200109_022431/model.pth')
-#
-# import numpy as np
-#
-#
-# def input_padding(input_ids, pad_id):
-#     max_len = max([len(li) for li in input_ids])
-#     for input_ids_ in input_ids:
-#         if len(input_ids_) < max_len:
-#             input_ids_.extend([pad_id] * (max_len - len(input_ids_)))
-#     return input_ids
-#
-#
-# def X_to_inputs(sents, token_to_idx, pos_to_idx, word_embed_range, root_tok='<bos>',
-#                 root_pos='<bos>', unk_tok='<unk>', pad_tok='<pad>', unk_pos='<bos>', pad_pos='<bos>'):
-#     if type(sents) == str:
-#         sents = [sents]
-#     ext_input_ids = []
-#     input_ids = []
-#     pos_ids = []
-#     mask = []
-#     x_lengths = []
-#     for sent in sents:
-#         # 句法分析开头先加个root
-#         ext_input_ids.append([token_to_idx[root_tok]])
-#         input_ids.append([token_to_idx[root_tok]])
-#         pos_ids.append([pos_to_idx[root_pos]])
-#         mask.append([1])
-#         for word, pos in sent:
-#             if word in token_to_idx:
-#                 if token_to_idx[word] < word_embed_range:
-#                     input_ids[-1].append(token_to_idx[word])
-#                 else:
-#                     input_ids[-1].append(token_to_idx[unk_tok])
-#                 ext_input_ids[-1].append(token_to_idx[word])
-#             else:
-#                 input_ids[-1].append(token_to_idx[unk_tok])
-#                 ext_input_ids[-1].append(token_to_idx[unk_tok])
-#             if pos in pos_to_idx:
-#                 pos_ids[-1].append(pos_to_idx[pos])
-#             else:
-#                 pos_ids[-1].append(pos_to_idx[unk_pos])
-#
-#             mask[-1].append(1)
-#
-#         x_lengths.append(len(ext_input_ids[-1]))
-#
-#     if len(input_ids) > 1:
-#         input_ids = input_padding(input_ids, token_to_idx[pad_tok])
-#         ext_input_ids = input_padding(ext_input_ids, token_to_idx[pad_tok])
-#         pos_ids = input_padding(pos_ids, token_to_idx[pad_pos])
-#         mask = input_padding(mask, 0)
-#
-#     return np.array(input_ids), np.array(ext_input_ids), np.array(pos_ids), np.array(mask), np.array(x_lengths)
-#
-#
-# inputs = [[('蜡烛', 'NN'), ('两', 'CD'), ('头', 'NN'), ('烧', 'VV')]]
-# token_to_idx = {w: i for i, w in enumerate(vocabs['form_vocab']['idx_to_token'])}
-# pos_to_idx = {w: i for i, w in enumerate(vocabs['cpos_vocab']['idx_to_token'])}
-# rel_vocab = {i: w for i, w in enumerate(vocabs['rel_vocab']['idx_to_token'])}
-# input_ids, ext_input_ids, pos_ids, mask, x_lengths = X_to_inputs(inputs, token_to_idx, pos_to_idx,
-#                                                                  word_embed_range=config['n_words'])
-#
-# model.eval()
-# with torch.no_grad():
-#     arc_scores, rel_scores = model(input_ids=torch.tensor(input_ids),
-#                                    ext_input_ids=torch.tensor(ext_input_ids),
-#                                    pos_ids=torch.tensor(pos_ids),
-#                                    mask=torch.tensor(mask),
-#                                    x_lengths=torch.tensor(x_lengths))
-# arc_scores = arc_scores.cpu().numpy()
-# rel_scores = rel_scores.cpu().numpy()
-#
-#
-# def Y_to_outputs(arc_scores, rel_scores, lengths, rel_vocab):
-#     sents = []
-#     arc_preds = np.argmax(arc_scores, -1)
-#     rel_preds = np.argmax(rel_scores, -1)
-#
-#     for arc_sent, rel_sent, length in zip(arc_preds, rel_preds, lengths):
-#         arcs = list(arc_sent)[1:length + 1]
-#         rels = list(rel_sent)[1:length + 1]
-#         sents.append([(a, rel_vocab[r[a]]) for a, r in zip(arcs, rels)])
-#
-#     return sents
-#
-# print(inputs)
-# print(Y_to_outputs(arc_scores, rel_scores, x_lengths, rel_vocab))
+        arc_scores = arc_scores.cpu().numpy()
+        rel_scores = rel_scores.cpu().numpy()
+        if task == 'dep':
+            results = get_dep_outputs(arc_scores, rel_scores, x_lengths, self.rel_vocab)
+        elif task == 'sdp':
+            results = get_sdp_outputs(arc_scores, rel_scores, x_lengths, self.rel_vocab)
+        else:
+            raise NotImplementedError
+
+        return results

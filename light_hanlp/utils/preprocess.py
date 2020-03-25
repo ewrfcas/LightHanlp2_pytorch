@@ -1,4 +1,5 @@
 import numpy as np
+from light_hanlp.utils.char_table import CharTable
 
 
 def input_padding(input_ids, pad_id):
@@ -15,7 +16,8 @@ def get_cws_inputs(sents, token_to_idx, unk_tok='<unk>', pad_tok='<pad>'):
     input_ids = []
     for sent in sents:
         input_ids.append([])
-        for word in sent:
+        chars = CharTable.normalize_chars(sent)
+        for word in chars:
             if word in token_to_idx:
                 input_ids[-1].append(token_to_idx[word])
             else:
@@ -171,3 +173,79 @@ def start_of_chunk(prev_tag, tag, prev_type, type_):
         chunk_start = True
 
     return chunk_start
+
+
+def get_dep_inputs(sents, token_to_idx, pos_to_idx, word_embed_range, root_tok='<bos>',
+                   root_pos='<bos>', unk_tok='<unk>', pad_tok='<pad>', unk_pos='<bos>', pad_pos='<bos>'):
+    if type(sents) == str:
+        sents = [sents]
+    ext_input_ids = []
+    input_ids = []
+    pos_ids = []
+    mask = []
+    x_lengths = []
+    for sent in sents:
+        # 句法分析开头先加个root
+        ext_input_ids.append([token_to_idx[root_tok]])
+        input_ids.append([token_to_idx[root_tok]])
+        pos_ids.append([pos_to_idx[root_pos]])
+        mask.append([1])
+        for word, pos in sent:
+            if word in token_to_idx:
+                if token_to_idx[word] < word_embed_range:
+                    input_ids[-1].append(token_to_idx[word])
+                else:
+                    input_ids[-1].append(token_to_idx[unk_tok])
+                ext_input_ids[-1].append(token_to_idx[word])
+            else:
+                input_ids[-1].append(token_to_idx[unk_tok])
+                ext_input_ids[-1].append(token_to_idx[unk_tok])
+            if pos in pos_to_idx:
+                pos_ids[-1].append(pos_to_idx[pos])
+            else:
+                pos_ids[-1].append(pos_to_idx[unk_pos])
+
+            mask[-1].append(1)
+
+        x_lengths.append(len(ext_input_ids[-1]))
+
+    if len(input_ids) > 1:
+        input_ids = input_padding(input_ids, token_to_idx[pad_tok])
+        ext_input_ids = input_padding(ext_input_ids, token_to_idx[pad_tok])
+        pos_ids = input_padding(pos_ids, token_to_idx[pad_pos])
+        mask = input_padding(mask, 0)
+
+    return np.array(input_ids), np.array(ext_input_ids), np.array(pos_ids), np.array(mask), np.array(x_lengths)
+
+
+def get_dep_outputs(arc_scores, rel_scores, lengths, rel_vocab):
+    sents = []
+    arc_preds = np.argmax(arc_scores, -1)
+    rel_preds = np.argmax(rel_scores, -1)
+
+    for arc_sent, rel_sent, length in zip(arc_preds, rel_preds, lengths):
+        arcs = list(arc_sent)[1:length + 1]
+        rels = list(rel_sent)[1:length + 1]
+        sents.append([(a, rel_vocab[r[a]]) for a, r in zip(arcs, rels)])
+
+    return sents
+
+def get_sdp_outputs(arc_scores, rel_scores, lengths, rel_vocab, orphan_relation='<root>'):
+    sents = []
+    # SDP和DEP最大的差别在于,DEP的关系唯一，SDP可能有多个，可能0个
+    arc_preds = arc_scores > 0
+    rel_preds = np.argmax(rel_scores, -1)
+
+    for arc_sent, rel_sent, length in zip(arc_preds, rel_preds, lengths):
+        sent = []
+        for arc, rel in zip(list(arc_sent[1:, 1:]), list(rel_sent[1:, 1:])):
+            ar = []
+            for idx, (a, r) in enumerate(zip(arc, rel)):
+                if a:
+                    ar.append((idx + 1, rel_vocab[r]))
+            if not ar:
+                # orphan
+                ar.append((0, orphan_relation))
+            sent.append(ar)
+        sents.append(sent)
+    return sents

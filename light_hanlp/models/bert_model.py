@@ -17,13 +17,17 @@
 from __future__ import print_function
 
 import copy
-import json
 import math
 import logging
+import json
 
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
+from light_hanlp.utils.preprocess import iobes_to_span
+from light_hanlp.utils.char_table import CharTable
+from bert.tokenization.bert_tokenization import FullTokenizer
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -661,9 +665,12 @@ class BertForMultipleChoice(PreTrainedBertModel):
 
 
 class BertForTokenClassification(PreTrainedBertModel):
-    def __init__(self, config, num_labels=14):
+    def __init__(self, config, cls_config, vocabs, vocab_file, num_labels=14):
         super(BertForTokenClassification, self).__init__(config)
         self.num_labels = num_labels
+        self.tokenizer = FullTokenizer(vocab_file)
+        self.max_length = cls_config['max_seq_length']
+        self.tag_vocab = {i: w for i, w in enumerate(vocabs['tag_vocab']['idx_to_token'])}
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.dense = nn.Linear(config.hidden_size, num_labels)
@@ -681,50 +688,23 @@ class BertForTokenClassification(PreTrainedBertModel):
         else:
             return logits
 
+    def predict(self, inputs):
+        input_ids, mask, segment_ids, tokenized_lengths, \
+        tokenized_words = inputs_to_samples(inputs, self.tokenizer, self.max_length)
+        results = []
+        with torch.no_grad():
+            logits = self.forward(input_ids=input_ids,
+                                  token_type_ids=segment_ids,
+                                  attention_mask=mask)
+        logits = logits.cpu().numpy()
+        preds = np.argmax(logits, axis=-1)
+        for i in range(preds.shape[0]):
+            pred_ = preds[i, 1:1 + tokenized_lengths[i]]
+            tags = [self.tag_vocab[p] for p in pred_]
+            words = tokenized_words[i]
+            results.append(iobes_to_span(words, tags))
 
-import json
-
-config = json.load(open('../pytorch_models/ner/ner_bert_base_msra_20200104_185735/config.json'))
-vocabs = json.load(open('../pytorch_models/ner/ner_bert_base_msra_20200104_185735/vocabs.json'))
-
-from bert.tokenization.bert_tokenization import FullTokenizer
-
-tokenizer = FullTokenizer(vocab_file='../pytorch_models/ner/ner_bert_base_msra_20200104_185735/vocab.txt')
-bert_config = BertConfig.from_json_file('../pytorch_models/ner/ner_bert_base_msra_20200104_185735/bert_config.json')
-model = BertForTokenClassification(bert_config, num_labels=len(vocabs['tag_vocab']['idx_to_token']))
-
-
-def torch_init_model(model, init_checkpoint):
-    state_dict = torch.load(init_checkpoint, map_location='cpu')
-    missing_keys = []
-    unexpected_keys = []
-    error_msgs = []
-    # copy state_dict so _load_from_state_dict can modify it
-    metadata = getattr(state_dict, '_metadata', None)
-    state_dict = state_dict.copy()
-    if metadata is not None:
-        state_dict._metadata = metadata
-
-    def load(module, prefix=''):
-        local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
-
-        module._load_from_state_dict(
-            state_dict, prefix, local_metadata, True, missing_keys, unexpected_keys, error_msgs)
-        for name, child in module._modules.items():
-            if child is not None:
-                load(child, prefix + name + '.')
-
-    load(model, prefix='')
-
-    print("missing keys:{}".format(missing_keys))
-    print('unexpected keys:{}'.format(unexpected_keys))
-    print('error msgs:{}'.format(error_msgs))
-
-
-torch_init_model(model, '../pytorch_models/ner/ner_bert_base_msra_20200104_185735/model.pth')
-
-model.eval()
-max_length = config['max_seq_length']
+        return results
 
 
 def inputs_to_samples(inputs, tokenizer, max_length):
@@ -738,6 +718,7 @@ def inputs_to_samples(inputs, tokenizer, max_length):
     for text in inputs:
         text = text.replace("“", "\"").replace("”", "\"").replace("——", "--"). \
             replace("—", "-").replace("―", "-").replace("…", "...").replace("‘", "\'").replace("’", "\'")
+        text = CharTable.normalize_text(text)
         tokens = tokenizer.tokenize(text)
         tokens = tokens[:seq_max_length]
         tokens = ["[CLS]"] + tokens + ["[SEP]"]
@@ -767,138 +748,3 @@ def inputs_to_samples(inputs, tokenizer, max_length):
     all_segment_ids = torch.tensor(all_segment_ids, dtype=torch.long)
 
     return all_input_ids, all_att_mask, all_segment_ids, tokenized_lengths, tokenized_words
-
-
-inputs = ['上海华安工业（集团）公司董事长谭旭光和秘书张晚霞来到美国纽约现代艺术博物馆参观。',
-          '萨哈夫说，伊拉克将同联合国销毁伊拉克大规模杀伤性武器特别委员会继续保持合作。']
-input_ids, mask, segment_ids, tokenized_lengths, tokenized_words = inputs_to_samples(inputs, tokenizer, max_length)
-
-with torch.no_grad():
-    logits = model(input_ids=input_ids,
-                   token_type_ids=segment_ids,
-                   attention_mask=mask)
-    logits = logits.cpu().numpy()
-
-import numpy as np
-
-
-def iobes_to_span(words, tags):
-    delimiter = ' '
-    if all([len(w) == 1 for w in words]):
-        delimiter = ''  # might be Chinese
-    entities = []
-    for tag, start, end in get_entities(tags):
-        entities.append((delimiter.join(words[start:end]), tag, start, end))
-    return entities
-
-
-def get_entities(seq, suffix=False):
-    """Gets entities from sequence.
-
-    Args:
-        seq (list): sequence of labels.
-
-    Returns:
-        list: list of (chunk_type, chunk_start, chunk_end).
-
-    Example:
-        >>> seq = ['B-PER', 'I-PER', 'O', 'B-LOC']
-        >>> get_entities(seq)
-        [('PER', 0, 2), ('LOC', 3, 4)]
-    """
-    # for nested list
-    if any(isinstance(s, list) for s in seq):
-        seq = [item for sublist in seq for item in sublist + ['O']]
-
-    prev_tag = 'O'
-    prev_type = ''
-    begin_offset = 0
-    chunks = []
-    for i, chunk in enumerate(seq + ['O']):
-        cells = chunk.split('-')
-        if suffix:
-            tag = chunk[-1]
-            type_ = cells[0]
-        else:
-            tag = chunk[0]
-            type_ = cells[-1]
-        if len(cells) == 1:
-            type_ = ''
-
-        if end_of_chunk(prev_tag, tag, prev_type, type_):
-            chunks.append((prev_type, begin_offset, i))
-        if start_of_chunk(prev_tag, tag, prev_type, type_):
-            begin_offset = i
-        prev_tag = tag
-        prev_type = type_
-
-    return chunks
-
-
-def end_of_chunk(prev_tag, tag, prev_type, type_):
-    """Checks if a chunk ended between the previous and current word.
-
-    Args:
-        prev_tag: previous chunk tag.
-        tag: current chunk tag.
-        prev_type: previous type.
-        type_: current type.
-
-    Returns:
-        chunk_end: boolean.
-    """
-    chunk_end = False
-
-    if prev_tag == 'E': chunk_end = True
-    if prev_tag == 'S': chunk_end = True
-
-    if prev_tag == 'B' and tag == 'B': chunk_end = True
-    if prev_tag == 'B' and tag == 'S': chunk_end = True
-    if prev_tag == 'B' and tag == 'O': chunk_end = True
-    if prev_tag == 'I' and tag == 'B': chunk_end = True
-    if prev_tag == 'I' and tag == 'S': chunk_end = True
-    if prev_tag == 'I' and tag == 'O': chunk_end = True
-
-    if prev_tag != 'O' and prev_tag != '.' and prev_type != type_:
-        chunk_end = True
-
-    return chunk_end
-
-
-def start_of_chunk(prev_tag, tag, prev_type, type_):
-    """Checks if a chunk started between the previous and current word.
-
-    Args:
-        prev_tag: previous chunk tag.
-        tag: current chunk tag.
-        prev_type: previous type.
-        type_: current type.
-
-    Returns:
-        chunk_start: boolean.
-    """
-    chunk_start = False
-
-    if tag == 'B': chunk_start = True
-    if tag == 'S': chunk_start = True
-
-    if prev_tag == 'E' and tag == 'E': chunk_start = True
-    if prev_tag == 'E' and tag == 'I': chunk_start = True
-    if prev_tag == 'S' and tag == 'E': chunk_start = True
-    if prev_tag == 'S' and tag == 'I': chunk_start = True
-    if prev_tag == 'O' and tag == 'E': chunk_start = True
-    if prev_tag == 'O' and tag == 'I': chunk_start = True
-
-    if tag != 'O' and tag != '.' and prev_type != type_:
-        chunk_start = True
-
-    return chunk_start
-
-
-tag_vocab = {i: w for i, w in enumerate(vocabs['tag_vocab']['idx_to_token'])}
-preds = np.argmax(logits, axis=-1)
-for i in range(preds.shape[0]):
-    pred_ = preds[i, 1:1 + tokenized_lengths[i]]
-    tags = [tag_vocab[p] for p in pred_]
-    words = tokenized_words[i]
-    print(iobes_to_span(words, tags))
