@@ -11,7 +11,7 @@ from tqdm import tqdm
 os.environ["CUDA_VISIBLE_DEVICES"] = '6'
 device = torch.device("cuda")
 test_round = 10000
-float16 = False
+float16 = True
 
 if __name__ == '__main__':
 
@@ -47,8 +47,6 @@ if __name__ == '__main__':
     vocabs = json.load(open('pytorch_models/pos/ctb5_pos_rnn_fasttext_20191230_202639/vocabs.json'))
     pos_model = RnnTagger(config, vocabs, fast_text_path='pytorch_models/third/wiki.zh/wiki.zh.bin')
     pos_model.to(device)
-    # if float16:
-    #     pos_model.half()
     torch_init_model(pos_model, 'pytorch_models/pos/ctb5_pos_rnn_fasttext_20191230_202639/model.pth')
     pos_model.eval()
 
@@ -74,8 +72,6 @@ if __name__ == '__main__':
     vocabs = json.load(open('pytorch_models/dep/biaffine_ctb7_20200109_022431/vocabs.json'))
     dep_model = BiaffineModel(config, vocabs)
     dep_model.to(device)
-    # if float16:
-    #     dep_model.half()
     torch_init_model(dep_model, 'pytorch_models/dep/biaffine_ctb7_20200109_022431/model.pth')
     dep_model.eval()
 
@@ -85,8 +81,6 @@ if __name__ == '__main__':
     vocabs = json.load(open('pytorch_models/sdp/semeval16-news-biaffine_20191231_235407/vocabs.json'))
     sdp_model = BiaffineModel(config, vocabs)
     sdp_model.to(device)
-    # if float16:
-    #     sdp_model.half()
     torch_init_model(sdp_model, 'pytorch_models/sdp/semeval16-news-biaffine_20191231_235407/model.pth')
     sdp_model.eval()
 
